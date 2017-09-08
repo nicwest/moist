@@ -2,6 +2,10 @@ package cmd
 
 import (
 	"context"
+	"io/ioutil"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/nicwest/moist/server"
 	log "github.com/sirupsen/logrus"
@@ -26,8 +30,20 @@ var serverCmd = &cobra.Command{
 		cctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
-		addr := viper.GetString("server_addr")
-		domain := viper.GetString("server_domain")
+		sigs := make(chan os.Signal, 1)
+		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+		go func() {
+			sig := <-sigs
+			log.WithFields(
+				log.Fields{
+					"signal": sig,
+				}).Info("received termination signal")
+			cancel()
+		}()
+
+		addr := viper.GetString("addr")
+		domain := viper.GetString("domain")
 
 		if domain == "" {
 			log.Fatal("no server domain specified")
@@ -40,6 +56,7 @@ var serverCmd = &cobra.Command{
 
 		log.WithFields(fields).Info("starting server")
 		s := server.New(domain)
+		s.ToWhiteList = []string{"foo@bar.com"}
 
 		go func() {
 			err := s.Listen(cctx, addr)
@@ -59,6 +76,14 @@ var serverCmd = &cobra.Command{
 
 			case msg := <-s.Inbox:
 				log.Infof("%+v", msg)
+				log.Infof("%+v", msg.Message)
+				if msg.Message != nil {
+					body, err := ioutil.ReadAll(msg.Message.Body)
+					if err != nil {
+						log.Error(err)
+					}
+					log.Infof("%+v", string(body))
+				}
 			}
 		}
 	},
@@ -66,10 +91,10 @@ var serverCmd = &cobra.Command{
 
 func init() {
 	RootCmd.AddCommand(serverCmd)
-	serverCmd.PersistentFlags().String("db", "moist.db", "the location of the moist database")
-	serverCmd.PersistentFlags().String("domain", "", "the domain of the server")
-	serverCmd.PersistentFlags().String("addr", ":1025", "the address to bind")
-	viper.BindPFlag("server_db", serverCmd.Flags().Lookup("db"))
-	viper.BindPFlag("server_domain", serverCmd.Flags().Lookup("domain"))
-	viper.BindPFlag("server_addr", serverCmd.Flags().Lookup("addr"))
+	serverCmd.Flags().String("db", "moist.db", "the location of the moist database")
+	serverCmd.Flags().String("domain", "", "the domain of the server")
+	serverCmd.Flags().String("addr", ":1025", "the address to bind")
+	viper.BindPFlag("db", serverCmd.Flags().Lookup("db"))
+	viper.BindPFlag("domain", serverCmd.Flags().Lookup("domain"))
+	viper.BindPFlag("addr", serverCmd.Flags().Lookup("addr"))
 }
